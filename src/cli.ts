@@ -41,6 +41,11 @@ import {
 import { renderSplash } from "./cli/splash.js";
 import { isFirstRun, readPrefs, resetPrefs, writePrefs } from "./cli/preferences.js";
 import { runOnboarding } from "./cli/onboarding.js";
+import {
+  iiiConsoleInstallCommand,
+  iiiConsoleManualInstallHint,
+  iiiConsoleReleaseUrl,
+} from "./cli/iii-console-install.js";
 import { setBootVerbose } from "./logger.js";
 import { VERSION } from "./version.js";
 
@@ -497,8 +502,7 @@ function detectIiiConsole(): IiiConsoleState {
   return { kind: "missing" };
 }
 
-const III_CONSOLE_INSTALL_CMD =
-  "curl -fsSL https://install.iii.dev/console/main/install.sh | sh";
+const III_CONSOLE_INSTALL_CMD = iiiConsoleInstallCommand(IIPINNED_VERSION);
 
 async function ensureIiiConsole(): Promise<IiiConsoleState> {
   const state = detectIiiConsole();
@@ -520,11 +524,22 @@ async function ensureIiiConsole(): Promise<IiiConsoleState> {
     return state;
   }
 
+  if (IS_WINDOWS) {
+    const ok = runWindowsIiiConsoleInstaller();
+    if (!ok) {
+      p.log.warn(
+        `iii console install failed. Install manually:\n  ${iiiConsoleManualInstallHint(IIPINNED_VERSION)}`,
+      );
+      return state;
+    }
+    return detectIiiConsole();
+  }
+
   const shBin = whichBinary("sh");
   const curlBin = whichBinary("curl");
   if (!shBin || !curlBin) {
     p.log.warn(
-      `curl or sh not found. Install manually:\n  ${III_CONSOLE_INSTALL_CMD}`,
+      `curl or sh not found. Install manually:\n  ${iiiConsoleManualInstallHint(IIPINNED_VERSION)}`,
     );
     return state;
   }
@@ -539,6 +554,52 @@ async function ensureIiiConsole(): Promise<IiiConsoleState> {
   }
   // Re-detect rather than trust install-script output paths.
   return detectIiiConsole();
+}
+
+function runWindowsIiiConsoleInstaller(): boolean {
+  const releaseUrl = iiiConsoleReleaseUrl(IIPINNED_VERSION, "win32", process.arch);
+  if (!releaseUrl) {
+    p.log.warn(
+      `iii console binary not available for win32/${process.arch}. Install manually:\n  ${iiiConsoleManualInstallHint(IIPINNED_VERSION, "win32", process.arch)}`,
+    );
+    return false;
+  }
+
+  const powershellBin =
+    whichBinary("powershell.exe") || whichBinary("powershell") || whichBinary("pwsh");
+  if (!powershellBin) {
+    p.log.warn(
+      `PowerShell not found. Install manually:\n  ${iiiConsoleManualInstallHint(IIPINNED_VERSION, "win32", process.arch)}`,
+    );
+    return false;
+  }
+
+  const script = `
+$ErrorActionPreference = 'Stop'
+$binDir = Join-Path $env:USERPROFILE '.local\\bin'
+$tempDir = Join-Path $env:TEMP ('iii-console-install-' + [guid]::NewGuid().ToString('N'))
+$zipPath = Join-Path $tempDir 'iii-console.zip'
+New-Item -ItemType Directory -Force -Path $binDir, $tempDir | Out-Null
+Invoke-WebRequest -Uri '${releaseUrl}' -OutFile $zipPath
+Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+$console = Get-ChildItem -Path $tempDir -Recurse -Filter 'iii-console.exe' | Select-Object -First 1
+if (-not $console) { throw 'iii-console.exe was not found in the downloaded archive.' }
+Copy-Item -Path $console.FullName -Destination (Join-Path $binDir 'iii-console.exe') -Force
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$parts = @()
+if ($userPath) { $parts = $userPath -split ';' | Where-Object { $_ } }
+if ($parts -notcontains $binDir) {
+  $newPath = if ($userPath) { "$userPath;$binDir" } else { $binDir }
+  [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+}
+Remove-Item -Path $tempDir -Recurse -Force
+`;
+
+  return runCommand(
+    powershellBin,
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+    { label: `Installing iii console v${IIPINNED_VERSION} (pinned)` },
+  );
 }
 
 function adoptRunningEngine(): void {
