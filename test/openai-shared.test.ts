@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   buildAuthHeaders,
+  buildBearerAuthHeaders,
   buildChatUrl,
   buildEmbeddingUrl,
   detectAzure,
@@ -165,6 +166,13 @@ describe("_openai-shared — buildAuthHeaders", () => {
       "api-key": "azure-key",
     });
   });
+
+  it("emits Authorization: Bearer for Azure Entra tokens", () => {
+    expect(buildBearerAuthHeaders("entra-token")).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer entra-token",
+    });
+  });
 });
 
 describe("_openai-shared — normalizeBaseUrl", () => {
@@ -263,11 +271,15 @@ describe("OpenAIEmbeddingProvider — Azure auto-detection (#371)", () => {
 
 describe("OpenAIProvider — Azure OpenAI aliases", () => {
   const ORIGINAL_AZURE_VERSION = process.env["AZURE_OPENAI_API_VERSION"];
+  const ORIGINAL_TOKEN_SCOPE = process.env["AZURE_OPENAI_TOKEN_SCOPE"];
 
   afterEach(() => {
     if (ORIGINAL_AZURE_VERSION === undefined)
       delete process.env["AZURE_OPENAI_API_VERSION"];
     else process.env["AZURE_OPENAI_API_VERSION"] = ORIGINAL_AZURE_VERSION;
+    if (ORIGINAL_TOKEN_SCOPE === undefined)
+      delete process.env["AZURE_OPENAI_TOKEN_SCOPE"];
+    else process.env["AZURE_OPENAI_TOKEN_SCOPE"] = ORIGINAL_TOKEN_SCOPE;
     vi.restoreAllMocks();
   });
 
@@ -295,5 +307,62 @@ describe("OpenAIProvider — Azure OpenAI aliases", () => {
     expect(capturedUrl).toBe(
       "https://myres.openai.azure.com/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2025-04-01-preview",
     );
+  });
+
+  it("uses Azure DefaultAzureCredential bearer tokens for Azure chat completions", async () => {
+    process.env["AZURE_OPENAI_TOKEN_SCOPE"] = "https://example.test/.default";
+    let capturedHeaders = new Headers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        capturedHeaders = new Headers(init?.headers);
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "summary" } }] }),
+          { status: 200 },
+        );
+      },
+    );
+    const credential = {
+      getToken: vi.fn(async (scope: string | string[]) => {
+        expect(scope).toBe("https://example.test/.default");
+        return { token: "aad-token" };
+      }),
+    };
+
+    const provider = new OpenAIProvider(
+      null,
+      "gpt-5.4-mini",
+      256,
+      "https://myres.openai.azure.com",
+      "azure-default-credential",
+      credential,
+    );
+    await provider.summarize("system", "user");
+
+    expect(capturedHeaders.get("Authorization")).toBe("Bearer aad-token");
+    expect(capturedHeaders.get("api-key")).toBeNull();
+  });
+
+  it("uses max_completion_tokens for GPT-5 deployments", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        capturedBody = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "summary" } }] }),
+          { status: 200 },
+        );
+      },
+    );
+
+    const provider = new OpenAIProvider(
+      "azure-key",
+      "gpt-5.4-mini",
+      256,
+      "https://myres.openai.azure.com",
+    );
+    await provider.summarize("system", "user");
+
+    expect(capturedBody.max_completion_tokens).toBe(256);
+    expect(capturedBody.max_tokens).toBeUndefined();
   });
 });

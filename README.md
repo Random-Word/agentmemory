@@ -1042,7 +1042,7 @@ agentmemory auto-detects from your environment. No API key needed if you have a 
 |----------|--------|-------|
 | **No-op (default)** | No config needed | LLM-backed compress/summarize is DISABLED. Synthetic BM25 compression + recall still work. See `AGENTMEMORY_ALLOW_AGENT_SDK` below if you used to rely on the Claude-subscription fallback. |
 | Anthropic API | `ANTHROPIC_API_KEY` | Per-token billing |
-| Azure OpenAI | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT` | Uses your Azure OpenAI deployment for compression/summarization. API-key auth only; Microsoft Entra ID / `DefaultAzureCredential` is not wired yet. |
+| Azure OpenAI | `AZURE_OPENAI_API_KEY` or `AZURE_OPENAI_AUTH=default`, plus `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT` | Uses your Azure OpenAI deployment for compression/summarization. Supports API-key auth and Microsoft Entra ID via Azure `DefaultAzureCredential`. |
 | MiniMax | `MINIMAX_API_KEY` | Anthropic-compatible |
 | Gemini | `GEMINI_API_KEY` | Also enables embeddings |
 | OpenRouter | `OPENROUTER_API_KEY` | Any model |
@@ -1056,7 +1056,10 @@ Create `~/.agentmemory/.env`:
 # LLM provider (pick one — default is the no-op provider: no LLM calls)
 # ANTHROPIC_API_KEY=sk-ant-...
 # ANTHROPIC_BASE_URL=...              # Optional: Anthropic-compatible proxy / Azure
-# AZURE_OPENAI_API_KEY=...            # API-key auth only
+# AZURE_OPENAI_API_KEY=...            # API-key auth
+# AZURE_OPENAI_AUTH=default           # Optional: use Azure DefaultAzureCredential instead
+# AZURE_OPENAI_TOKEN_SCOPE=https://cognitiveservices.azure.com/.default
+#                                      # Optional: override Entra token scope
 # AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com
 # AZURE_OPENAI_DEPLOYMENT=gpt-5.4-mini # Azure deployment name passed as the model
 # AZURE_OPENAI_API_VERSION=2025-04-01-preview

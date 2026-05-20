@@ -1,9 +1,11 @@
 import type { MemoryProvider } from "../types.js";
+import { DefaultAzureCredential } from "@azure/identity";
 import { getEnvVar } from "../config.js";
 import { fetchWithTimeout } from "./_fetch.js";
 import {
   DEFAULT_AZURE_API_VERSION,
   buildAuthHeaders,
+  buildBearerAuthHeaders,
   buildChatUrl,
   detectAzure,
   normalizeBaseUrl,
@@ -11,6 +13,12 @@ import {
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_AZURE_TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default";
+
+type OpenAIAuthMode = "api-key" | "azure-default-credential";
+type AzureTokenCredential = {
+  getToken(scopes: string | string[]): Promise<{ token: string } | null>;
+};
 
 /**
  * OpenAI-compatible LLM provider.
@@ -26,6 +34,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  * Required env vars:
  *   OPENAI_API_KEY  — API key
  *   AZURE_OPENAI_API_KEY — Azure OpenAI API key alias for chat completions
+ *   AZURE_OPENAI_AUTH=default — use Azure DefaultAzureCredential instead of an API key
  *
  * Optional:
  *   OPENAI_BASE_URL          — base URL without path (default: https://api.openai.com).
@@ -33,6 +42,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  *   OPENAI_MODEL             — model name (default: gpt-4o-mini)
  *   OPENAI_API_VERSION       — Azure api-version query param (default: 2024-08-01-preview)
  *   AZURE_OPENAI_API_VERSION — Azure-specific alias for OPENAI_API_VERSION
+ *   AZURE_OPENAI_TOKEN_SCOPE — Entra token scope for Azure OpenAI
  *   OPENAI_TIMEOUT_MS        — outbound fetch timeout in ms (OpenAI-scoped alias,
  *                              takes precedence over AGENTMEMORY_LLM_TIMEOUT_MS
  *                              for back-compat with the v0.9.17 shipping name).
@@ -48,7 +58,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  */
 export class OpenAIProvider implements MemoryProvider {
   name = "openai";
-  private apiKey: string;
+  private apiKey: string | null;
   private model: string;
   private maxTokens: number;
   private baseUrl: string;
@@ -56,8 +66,18 @@ export class OpenAIProvider implements MemoryProvider {
   private timeoutMs: number;
   private isAzure: boolean;
   private azureApiVersion: string;
+  private authMode: OpenAIAuthMode;
+  private azureCredential?: AzureTokenCredential;
+  private azureTokenScope: string;
 
-  constructor(apiKey: string, model: string, maxTokens: number, baseURL?: string) {
+  constructor(
+    apiKey: string | null,
+    model: string,
+    maxTokens: number,
+    baseURL?: string,
+    authMode: OpenAIAuthMode = "api-key",
+    azureCredential?: AzureTokenCredential,
+  ) {
     this.apiKey = apiKey;
     this.model = model;
     this.maxTokens = maxTokens;
@@ -69,6 +89,15 @@ export class OpenAIProvider implements MemoryProvider {
       getEnvVar("OPENAI_API_VERSION") ||
       DEFAULT_AZURE_API_VERSION;
     this.isAzure = detectAzure(this.baseUrl);
+    this.authMode = authMode;
+    this.azureCredential = azureCredential;
+    this.azureTokenScope =
+      getEnvVar("AZURE_OPENAI_TOKEN_SCOPE") || DEFAULT_AZURE_TOKEN_SCOPE;
+    if (this.authMode === "azure-default-credential" && !this.isAzure) {
+      throw new Error(
+        "Azure DefaultAzureCredential auth requires an Azure OpenAI endpoint",
+      );
+    }
   }
 
   async compress(systemPrompt: string, userPrompt: string): Promise<string> {
@@ -83,12 +112,13 @@ export class OpenAIProvider implements MemoryProvider {
     const url = buildChatUrl(this.baseUrl, this.isAzure, this.azureApiVersion);
     const body: Record<string, unknown> = {
       model: this.model,
-      max_tokens: this.maxTokens,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
     };
+    body[usesMaxCompletionTokens(this.model) ? "max_completion_tokens" : "max_tokens"] =
+      this.maxTokens;
     if (this.reasoningEffort) {
       body.reasoning_effort = this.reasoningEffort;
     }
@@ -105,7 +135,7 @@ export class OpenAIProvider implements MemoryProvider {
         url,
         {
           method: "POST",
-          headers: buildAuthHeaders(this.apiKey, this.isAzure),
+          headers: await this.authHeaders(),
           body: JSON.stringify(body),
         },
         this.timeoutMs,
@@ -142,6 +172,23 @@ export class OpenAIProvider implements MemoryProvider {
       `OpenAI returned unexpected response: ${JSON.stringify(data).slice(0, 200)}`,
     );
   }
+
+  private async authHeaders(): Promise<Record<string, string>> {
+    if (this.authMode === "azure-default-credential") {
+      const credential = this.azureCredential ?? new DefaultAzureCredential();
+      const token = await credential.getToken(this.azureTokenScope);
+      if (!token?.token) {
+        throw new Error(
+          `Azure DefaultAzureCredential did not return a token for ${this.azureTokenScope}`,
+        );
+      }
+      return buildBearerAuthHeaders(token.token);
+    }
+    if (!this.apiKey) {
+      throw new Error("OPENAI_API_KEY or AZURE_OPENAI_API_KEY is required for API-key auth");
+    }
+    return buildAuthHeaders(this.apiKey, this.isAzure);
+  }
 }
 
 // Resolves the outbound-fetch timeout for the OpenAI LLM path.
@@ -173,3 +220,6 @@ function parsePositiveInt(raw: string | null | undefined): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+function usesMaxCompletionTokens(model: string): boolean {
+  return /^gpt-5(?:[.-]|$)/i.test(model);
+}

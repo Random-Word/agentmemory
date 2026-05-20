@@ -97,6 +97,20 @@ function createBaseProvider(config: ProviderConfig): MemoryProvider {
         "https://openrouter.ai/api/v1/chat/completions",
       );
     case "openai": {
+      if (config.auth === "azure-default-credential") {
+        if (!config.baseURL || !detectAzure(config.baseURL)) {
+          throw new Error(
+            "Azure DefaultAzureCredential auth requires AZURE_OPENAI_ENDPOINT or AZURE_OPENAI_BASE_URL",
+          );
+        }
+        return new OpenAIProvider(
+          null,
+          config.model,
+          config.maxTokens,
+          config.baseURL,
+          "azure-default-credential",
+        );
+      }
       const azureKey = getEnvVar("AZURE_OPENAI_API_KEY");
       const standardKey = getEnvVar("OPENAI_API_KEY");
       const useAzureKey = config.baseURL ? detectAzure(config.baseURL) : false;

@@ -5,6 +5,7 @@ import { createProvider } from "../src/providers/index.js";
 
 const ORIGINAL_OPENAI_KEY = process.env["OPENAI_API_KEY"];
 const ORIGINAL_AZURE_KEY = process.env["AZURE_OPENAI_API_KEY"];
+const ORIGINAL_AZURE_AUTH = process.env["AZURE_OPENAI_AUTH"];
 
 describe("Azure OpenAI config detection", () => {
   afterEach(() => {
@@ -12,6 +13,8 @@ describe("Azure OpenAI config detection", () => {
     else process.env["OPENAI_API_KEY"] = ORIGINAL_OPENAI_KEY;
     if (ORIGINAL_AZURE_KEY === undefined) delete process.env["AZURE_OPENAI_API_KEY"];
     else process.env["AZURE_OPENAI_API_KEY"] = ORIGINAL_AZURE_KEY;
+    if (ORIGINAL_AZURE_AUTH === undefined) delete process.env["AZURE_OPENAI_AUTH"];
+    else process.env["AZURE_OPENAI_AUTH"] = ORIGINAL_AZURE_AUTH;
     vi.restoreAllMocks();
   });
 
@@ -27,6 +30,7 @@ describe("Azure OpenAI config detection", () => {
       model: "gpt-5.4-mini",
       maxTokens: 4096,
       baseURL: "https://agentmemory.openai.azure.com",
+      auth: "api-key",
     });
   });
 
@@ -53,6 +57,22 @@ describe("Azure OpenAI config detection", () => {
     expect(provider.provider).toBe("noop");
   });
 
+  it("supports Azure DefaultAzureCredential auth without an API key", () => {
+    const provider = detectProviderForEnv({
+      AZURE_OPENAI_AUTH: "default",
+      AZURE_OPENAI_ENDPOINT: "https://agentmemory.openai.azure.com",
+      AZURE_OPENAI_DEPLOYMENT: "gpt-5.4-mini",
+    });
+
+    expect(provider).toEqual({
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      maxTokens: 4096,
+      baseURL: "https://agentmemory.openai.azure.com",
+      auth: "azure-default-credential",
+    });
+  });
+
   it("uses the Azure key for Azure requests even when OPENAI_API_KEY is also set", async () => {
     process.env["OPENAI_API_KEY"] = "public-openai-key";
     process.env["AZURE_OPENAI_API_KEY"] = "azure-openai-key";
@@ -77,5 +97,19 @@ describe("Azure OpenAI config detection", () => {
 
     expect(capturedHeaders.get("api-key")).toBe("azure-openai-key");
     expect(capturedHeaders.get("Authorization")).toBeNull();
+  });
+
+  it("uses DefaultAzureCredential auth when explicitly requested even if keys exist", () => {
+    process.env["OPENAI_API_KEY"] = "public-openai-key";
+    process.env["AZURE_OPENAI_API_KEY"] = "azure-openai-key";
+    const config = detectProviderForEnv({
+      OPENAI_API_KEY: "public-openai-key",
+      AZURE_OPENAI_API_KEY: "azure-openai-key",
+      AZURE_OPENAI_AUTH: "default",
+      AZURE_OPENAI_ENDPOINT: "https://agentmemory.openai.azure.com",
+      AZURE_OPENAI_DEPLOYMENT: "gpt-5.4-mini",
+    });
+
+    expect(config.auth).toBe("azure-default-credential");
   });
 });

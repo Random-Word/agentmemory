@@ -141,6 +141,7 @@ export interface ProviderConfig {
   maxTokens: number;
   /** Optional base URL override (e.g. for Anthropic-compatible APIs or local proxies) */
   baseURL?: string;
+  auth?: "api-key" | "azure-default-credential";
 }
 
 export type ProviderType = "agent-sdk" | "anthropic" | "gemini" | "openrouter" | "minimax" | "openai" | "noop";

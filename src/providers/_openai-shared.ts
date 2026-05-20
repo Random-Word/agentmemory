@@ -133,6 +133,13 @@ export function buildAuthHeaders(
   };
 }
 
+export function buildBearerAuthHeaders(accessToken: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${accessToken}`,
+  };
+}
+
 export function normalizeBaseUrl(raw: string | undefined): string {
   return (raw || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, "");
 }
